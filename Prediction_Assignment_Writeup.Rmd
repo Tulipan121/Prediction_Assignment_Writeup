@@ -1,0 +1,121 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Blaž Zupančič"
+date: "24 9 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(randomForestSRC)
+library(caret)
+library(corrplot)
+set.seed(1107)
+```
+
+## Introduction
+
+Using data from Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises, we build a predition model to evaluate if participants were doing any and which of the common mistakes while exercising using weights.
+
+In order to evaluate the correctness of weight lifting, 4 sensors (belt, glove, arm-bend and dumbell) with xyz orientation recordings were used. From the article by the authors: "Participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbellonly halfway (Class C), lowering the dumbbell only halfway(Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes"
+
+Our prediction model has been croos validated using 40 % of data. It's accuracy on the independent data was over 99 % in comparison to the model the authors published in the article, which had a weighted average accuracy of 98.2 %. The overall recognition performance of the test from the article was 78.2 %.
+
+## Data subsetting
+
+```{r 1}
+training <- read.csv("./pml-training.csv")
+testing <- read.csv("./pml-testing.csv")
+
+training <- training[,-c(1:7)]
+testing <- testing[, -c(1:7)]
+
+col_all_NA <- which(sapply(testing, FUN = function(x) all(is.na(x))))
+
+n_col <- length(col_all_NA)
+
+testing <- testing[, -col_all_NA]
+training <- training[, -col_all_NA]
+ 
+ncol(training)
+ncol(testing)
+
+inTrain = createDataPartition(training$classe, p = 3/4)[[1]]
+
+validation = training[-inTrain,]
+training = training[ inTrain,]
+```
+
+Looking at the data we can see that the first 7 columns are providing information about the experiments and are not features of classe. Therefor we subset them from the dataset. Another thing we see is that `r n_col` columns of the test dataset include only NAs. Both the training and the test dataset were subset not to include these columns. In order to use a suitable method we turned to https://mlr.mlr-org.com/articles/tutorial/filter_methods.html#current-methods, where we found R package randomForestSRC by Hemant Ishwaran and Udaya B. Kogalur, which can be used to make classification models and is quite fast.
+
+## Analysis
+
+### Model building
+
+```{r 2}
+model <- rfsrc(classe ~ ., data = training)
+
+print(model)
+
+model_test_err <- round(get.mv.error(model) * 100, 2)
+
+model_time <- system.time(rfsrc(classe ~ ., data = training))[3]
+```
+
+The complete analysis using randomForestSRC with default settings took a moderate `r model_time` s. Looking at the paper from the authors, we noticed they cut down the number of variables they eventually used in the random forest model with Correlation-based Feature Subset Selection for Machine Learning by M. A. Hall. As rfsrc method is reasonably fast we felt no need to do the same.
+
+Resampling used to grow trees was done without resampling. Cross validation in the model was done using random 63 % of the training data, or 12401 samples at each of the 1000 trees.
+
+The best accuracy achieved on the training dataset without extending computation time was `r model_test_err`%.
+
+### Model validation
+
+```{r 3}
+
+cross_val <- predict(model, newdata = validation)
+
+confusionMatrix(cross_val$yvar, validation$classe)
+
+```
+
+We used the package's in-build out of sample error rate calculation. On the validation subset our results were very close to being perfect. This result makes us doubt in our model since it seems too good to be true. There is a possibility we still have variables that are inherent to the experiments themselves (like names or time signatures), not of the mistakes in doing the exercises.
+
+### Prediction for testing problems
+
+Our model predict the following classes for the given testing models (the whole table can be found in the Appendix):
+
+```{r 4}
+
+result <- predict.rfsrc(model, testing)
+
+test_classe_names <- names(data.frame(result$predicted))
+
+test_class_no <- apply(result$predicted, MARGIN = 1, function(x) which(x == max(x)))
+
+test_classe <- test_classe_names[test_class_no]
+
+table <- t(data.frame(test_classe))
+
+colnames(table) <- testing$problem_id
+
+knitr::kable(table, align = "c", caption = "Predicted classe for testing problems")
+
+```
+
+## Appendix
+
+List of low variance variables:
+
+```{r}
+low_val <- nearZeroVar(training)
+
+print(names(training)[low_val])
+```
+
+Correlation matrix of the ramaining variables.
+
+```{r}
+corMatrix <- cor(training[, -c(low_val, ncol(training))])
+corrplot(corMatrix, order = "FPC", method = "color", type = "lower", 
+         tl.cex = 0.8, tl.col = rgb(0, 0, 0), )
+```
